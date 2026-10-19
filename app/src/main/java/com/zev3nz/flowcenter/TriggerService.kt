@@ -189,14 +189,11 @@ class TriggerService : AccessibilityService() {
         val soft = hw.copy(Bitmap.Config.ARGB_8888, false) ?: return null
         hw.recycle()
 
-        // Halve it again and again (smooth, no jagged edges) until it is about 1/8 size
-        var cur = soft
+        // Scale down directly to 1/8 size in a single efficient step for budget devices
         val targetW = max(1, soft.width / 8)
-        while (cur.width / 2 >= targetW && cur.height / 2 >= 1) {
-            val next = Bitmap.createScaledBitmap(cur, cur.width / 2, cur.height / 2, true)
-            if (next !== cur) cur.recycle()
-            cur = next
-        }
+        val targetH = max(1, soft.height / 8)
+        val cur = Bitmap.createScaledBitmap(soft, targetW, targetH, true)
+        if (cur !== soft) soft.recycle()
 
         val w = cur.width
         val h = cur.height
