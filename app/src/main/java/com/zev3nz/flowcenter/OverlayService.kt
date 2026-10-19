@@ -2870,6 +2870,7 @@ class OverlayService : Service() {
         private var downY = 0f
         private var startedOnCard = false
         private var fired = false
+        private var springAnimator: ValueAnimator? = null
 
         override fun getTopFadingEdgeStrength(): Float = 0f
 
@@ -2877,6 +2878,7 @@ class OverlayService : Service() {
             if (editTouch?.invoke(e) == true) return true
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
+                    springAnimator?.cancel()
                     anchorY = -1f
                     closing = false
                     fired = false
@@ -2889,6 +2891,16 @@ class OverlayService : Service() {
                     if (!swiping && !blockGestures) {
                         val dx = e.rawX - downX
                         val dy = e.rawY - downY
+
+                        // Smooth spring-like overscroll bounce effect (iOS / ColorOS style)
+                        if (!canScrollVertically(-1) && dy > 0) {
+                            translationY = (dy * 0.35f).coerceAtMost(dp(100).toFloat())
+                        } else if (!canScrollVertically(1) && dy < 0) {
+                            translationY = (dy * 0.35f).coerceAtLeast(-dp(100).toFloat())
+                        } else {
+                            if (translationY != 0f) translationY = 0f
+                        }
+
                         if (!fired) {
                             if (dy > dp(60) && dy > abs(dx) * 1.5f && !canScrollVertically(-1)) {
                                 fired = true
@@ -2913,7 +2925,17 @@ class OverlayService : Service() {
                         }
                     }
                 }
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> onTouching?.invoke(false)
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    onTouching?.invoke(false)
+                    if (translationY != 0f) {
+                        springAnimator = ValueAnimator.ofFloat(translationY, 0f).apply {
+                            duration = 380
+                            interpolator = PathInterpolator(0.17f, 0.89f, 0.32f, 1.25f) // spring bounce
+                            addUpdateListener { translationY = it.animatedValue as Float }
+                            start()
+                        }
+                    }
+                }
             }
             return super.dispatchTouchEvent(e)
         }

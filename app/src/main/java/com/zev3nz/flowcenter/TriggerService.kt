@@ -35,11 +35,10 @@ class TriggerService : AccessibilityService() {
     private var lastCapture = 0L
     private val worker = Executors.newSingleThreadExecutor() // blur work never touches the UI thread
 
-    // Very cheap phones (Android marks them "low RAM" or have 4 or fewer CPU cores) skip the screenshot completely:
+    // Very cheap phones (Android marks them "low RAM") skip the screenshot completely:
     // it needs a big temporary picture in memory, and the panel looks fine without the blur.
     private val lowRam by lazy {
-        (getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager).isLowRamDevice ||
-            Runtime.getRuntime().availableProcessors() <= 4
+        (getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager).isLowRamDevice
     }
 
     // While set, we do NOT hijack the system panel (used when the user
