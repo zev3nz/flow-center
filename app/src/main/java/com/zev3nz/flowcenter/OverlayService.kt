@@ -131,7 +131,7 @@ class OverlayService : Service() {
         // GRID_ROWS - 1 more rows of GRID_COLS cells that appear when the control center is expanded.
         // Every cell (a "slot") holds one toggle or nothing (EMPTY).
         const val TILE_COUNT = 12   // how many different toggles exist
-        const val GRID_ROWS = 8
+        const val GRID_ROWS = 7
         const val FAV_COLS = 5
         const val GRID_COLS = 4
         const val SLOT_COUNT = FAV_COLS + (GRID_ROWS - 1) * GRID_COLS // 33 cells
@@ -1041,7 +1041,7 @@ class OverlayService : Service() {
         }
 
         // Expanded rows: 4 toggles per row. Together with the favourite row on top that makes
-        // GRID_ROWS (8) rows in total. Cells that hold no toggle are simply empty.
+        // GRID_ROWS (7) rows in total. Cells that hold no toggle are simply empty.
         val gridRows = ArrayList<TileRowParts>()
         for (r in 0 until GRID_ROWS - 1) {
             val from = FAV_COLS + r * GRID_COLS
