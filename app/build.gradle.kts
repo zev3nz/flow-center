@@ -49,8 +49,8 @@ android {
         applicationId = "com.zev3nz.flowcenter"
         minSdk = 21 
         targetSdk = 36  
-        versionCode = 5
-        versionName = "0.1.5-beta"
+        versionCode = 6
+        versionName = "0.1.6-beta"
         
         vectorDrawables { 
             useSupportLibrary = true
