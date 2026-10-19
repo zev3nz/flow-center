@@ -81,18 +81,38 @@ class TriggerService : AccessibilityService() {
 
         val v = View(this)
         var startY = 0f
+        var startX = 0f
         var fired = false
         v.setOnTouchListener { _, e ->
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     startY = e.rawY
+                    startX = e.rawX
                     fired = false
                     captureBackdrop() // ready by the time the swipe is finished
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    if (!fired && e.rawY - startY > 15 * d) {
+                    val dy = e.rawY - startY
+                    val dx = e.rawX - startX
+                    if (!fired && dy > 3 * d && dy > kotlin.math.abs(dx) * 0.3f) {
                         fired = true
                         suppressUntil = 0L // a real top swipe always shows OUR panel
+                        showControlCenter()
+                    }
+                }
+                MotionEvent.ACTION_UP -> {
+                    val dy = e.rawY - startY
+                    if (!fired && dy > 3 * d) {
+                        fired = true
+                        suppressUntil = 0L
+                        showControlCenter()
+                    }
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    val dy = e.rawY - startY
+                    if (!fired && dy > 1 * d) {
+                        fired = true
+                        suppressUntil = 0L
                         showControlCenter()
                     }
                 }
