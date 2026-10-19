@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="24dp">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Control Center Settings"
+        android:textSize="22sp" />
+
+    <TextView
+        android:id="@+id/statusText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:textSize="15sp" />
+
+    <Button
+        android:id="@+id/overlayButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:text="1. Allow display over other apps" />
+
+    <Button
+        android:id="@+id/writeButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="2. Allow changing system settings" />
+
+    <Button
+        android:id="@+id/accessButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="3. Turn on accessibility (for top swipe)" />
+    <Button
+        android:id="@+id/notifButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="4. Allow notification access" />
+        
+    <Button
+        android:id="@+id/startButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:text="Start Control Center" />
+
+    <Button
+        android:id="@+id/stopButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Stop Control Center" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="20dp"
+        android:textSize="13sp"
+        android:text="In Accessibility settings, look under Installed apps and turn on Control Center Gesture." />
+</LinearLayout>
