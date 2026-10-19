@@ -71,6 +71,9 @@ import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.sin
 import kotlin.math.min
+import kotlin.math.exp
+import kotlin.math.roundToInt
+import kotlin.math.sqrt
 
 class OverlayService : Service() {
 
@@ -110,6 +113,15 @@ class OverlayService : Service() {
         // Fade-in of the buttons. Original quick fade: LEN 0.5 / MIX 0. Long fade: LEN 0.9 / MIX 1.
         const val EXPAND_FADE_LEN = 0.7f    // how much of the fade timeline the button fade-in uses (bigger = longer fade)
         const val EXPAND_FADE_MIX = 0.5f    // 0 = fade follows the fast movement curve, 1 = fade runs evenly over the whole animation
+        // iOS-style scrolling of the panel (toggles + notifications): rubber band while dragging past an end,
+        // a spring that pulls the content back, and flings that glide on into the spring instead of stopping dead.
+        // Nothing is stretched or scaled; the content only slides. (false = back to the plain Android scroll)
+        const val BOUNCE_ENABLED = true
+        const val BOUNCE_FRICTION = 2.3f      // fling slow-down per second (smaller = glides longer; iOS is about 2.0)
+        const val BOUNCE_STIFFNESS = 190f     // spring strength (bigger = snappier return)
+        const val BOUNCE_DAMPING = 0.78f      // 1 = no overshoot at all, ~0.6 = clearly bouncy. Keep it BELOW 1
+        const val BOUNCE_ENTRY_SPEED = 0.75f  // how much of a fling's speed carries into the bounce (bigger = flies further past the end)
+        const val BOUNCE_RUBBER = 0.55f       // drag resistance past an end (smaller = stiffer; iOS uses 0.55)
         const val LABEL_H_DP = 16   // height of the name label under a tile
         const val LABEL_GAP_DP = 6  // gap between the round tile and its name label
         const val T_FLASH = 0
@@ -420,7 +432,7 @@ class OverlayService : Service() {
         scroll.isVerticalScrollBarEnabled = false
         scroll.isVerticalFadingEdgeEnabled = true
         scroll.setFadingEdgeLength(dp(120))
-        scroll.overScrollMode = View.OVER_SCROLL_ALWAYS
+        scroll.overScrollMode = View.OVER_SCROLL_NEVER
         root.scrollView = scroll // the root brings the scroll position up to date before it draws the backdrop
         root.addView(scroll, FrameLayout.LayoutParams(MATCH, MATCH))
 
@@ -431,6 +443,7 @@ class OverlayService : Service() {
         content.minimumHeight = resources.displayMetrics.heightPixels
         content.setOnClickListener { if (!root.editing) closePanel() }
         scroll.addView(content, FrameLayout.LayoutParams(MATCH, WRAP))
+        scroll.bounceView = content // the bounce slides this (see PanelScroll)
 
         // ───────────── Top row: clock + date (left), small buttons (right) ─────────────
         val topRow = LinearLayout(this)
@@ -812,7 +825,7 @@ class OverlayService : Service() {
             }
 
             // 1. The whole panel moves down a little (clock, date, top buttons, favourites, rows).
-            content.translationY = dp(EXPAND_SHIFT_DP) * e
+            content.translationY = dp(EXPAND_SHIFT_DP) * e + scroll.bounceOffset
             // 2. The favourites (and everything under them) move down a little further:
             //    real extra space above them, so nothing can overlap.
             val gapH = (dp(EXPAND_FAV_DROP_DP) * e).toInt()
@@ -890,7 +903,7 @@ class OverlayService : Service() {
                 c.label.alpha = if (expanded) 1f else 0f
             }
             // the shifts stay while expanded, and are gone when collapsed
-            content.translationY = if (expanded) dp(EXPAND_SHIFT_DP).toFloat() else 0f
+            content.translationY = (if (expanded) dp(EXPAND_SHIFT_DP).toFloat() else 0f) + scroll.bounceOffset
             val glp = favGap.layoutParams
             glp.height = if (expanded) dp(EXPAND_FAV_DROP_DP) else 0
             favGap.layoutParams = glp
@@ -2870,7 +2883,192 @@ class OverlayService : Service() {
         private var downY = 0f
         private var startedOnCard = false
         private var fired = false
-        private var springAnimator: ValueAnimator? = null
+
+        // ───────────── iOS-style kinetic scrolling with a spring bounce ─────────────
+        // The Android over-scroll (stretch / glow) stays OFF (OVER_SCROLL_NEVER). This view does its own physics:
+        //  * dragging past an end: the content follows the finger with growing resistance (rubber band)
+        //  * letting go while stretched: a spring pulls it back
+        //  * a fling glides with a smooth exponential slow-down; if it reaches an end while still moving,
+        //    its speed flows into the spring: the content slides a little past the end and settles back
+        // Only bounceView.translationY changes, so nothing is stretched.
+        var bounceView: View? = null
+        // how far the content is pushed past an end right now (px, + = down). The panel's own shift is added to it.
+        var bounceOffset = 0f
+            private set
+        private var dragOver = 0f   // finger travel past an end, before the rubber band (+ = past the bottom)
+        private var phase = 0       // 0 = idle, 1 = gliding (fling), 2 = spring
+        private var pos = 0f        // gliding: scroll position as a float
+        private var flingVel = 0f   // gliding: px/s, + = towards the bottom of the list
+        private var springVel = 0f  // spring: px/s of the offset, + = down
+        private var lastNs = 0L
+        private var grabbed = false // the finger came down on content that was still moving
+
+        private val frameCb = object : Choreographer.FrameCallback {
+            override fun doFrame(frameTimeNanos: Long) {
+                if (phase == 0) return
+                val dt = ((frameTimeNanos - lastNs) / 1_000_000_000f).coerceIn(0.001f, 0.05f)
+                lastNs = frameTimeNanos
+                if (phase == 1) stepGlide(dt) else stepSpring(dt)
+                if (phase != 0) Choreographer.getInstance().postFrameCallback(this)
+            }
+        }
+
+        private fun schedule() {
+            lastNs = System.nanoTime()
+            Choreographer.getInstance().removeFrameCallback(frameCb)
+            Choreographer.getInstance().postFrameCallback(frameCb)
+        }
+
+        private fun scrollRange(): Int {
+            val c = getChildAt(0) ?: return 0
+            return maxOf(0, c.height - (height - paddingTop - paddingBottom))
+        }
+
+        // The iOS rubber band: the content moves less and less the further the finger goes
+        private fun rubber(x: Float): Float {
+            val d = height.toFloat().coerceAtLeast(1f)
+            return (1f - 1f / (x * BOUNCE_RUBBER / d + 1f)) * d
+        }
+
+        private fun rubberInverse(y: Float): Float {
+            val d = height.toFloat().coerceAtLeast(1f)
+            val yy = y.coerceIn(0f, d * 0.98f)
+            return (d / BOUNCE_RUBBER) * (1f / (1f - yy / d) - 1f)
+        }
+
+        private fun setOffset(o: Float) {
+            val v = bounceView
+            if (v != null) v.translationY += o - bounceOffset // keeps the panel's own shift intact
+            bounceOffset = o
+        }
+
+        private fun applyDrag() {
+            val r = rubber(abs(dragOver))
+            setOffset(if (dragOver > 0f) -r else if (dragOver < 0f) r else 0f)
+        }
+
+        private fun stepGlide(dt: Float) {
+            val e = exp(-BOUNCE_FRICTION * dt)
+            pos += flingVel * (1f - e) / BOUNCE_FRICTION
+            flingVel *= e
+            val range = scrollRange().toFloat()
+            if (pos < 0f || pos > range) {
+                // reached an end while still moving: hand the speed over to the spring
+                val edge = pos.coerceIn(0f, range)
+                scrollTo(0, edge.roundToInt())
+                springVel = -flingVel * BOUNCE_ENTRY_SPEED
+                setOffset(-(pos - edge))
+                phase = 2
+                return
+            }
+            scrollTo(0, pos.roundToInt())
+            if (abs(flingVel) < 30f) phase = 0
+        }
+
+        // Exact solution of a damped spring (no integration error, same result at any frame rate)
+        private fun stepSpring(dt: Float) {
+            val w = sqrt(BOUNCE_STIFFNESS)
+            val z = BOUNCE_DAMPING
+            val wd = w * sqrt(1f - z * z)
+            val decay = exp(-z * w * dt)
+            val c = cos(wd * dt)
+            val s = sin(wd * dt)
+            val x = bounceOffset
+            val b = (springVel + z * w * x) / wd
+            val nx = decay * (x * c + b * s)
+            springVel = decay * ((wd * b - z * w * x) * c - (z * w * b + wd * x) * s)
+            if (abs(nx) < 0.5f && abs(springVel) < 15f) {
+                springVel = 0f
+                setOffset(0f)
+                phase = 0
+            } else {
+                setOffset(nx)
+            }
+        }
+
+        // A finger lands: freeze whatever is gliding / bouncing right where it is.
+        // Returns true if the content was still moving or stretched.
+        private fun haltBounce(): Boolean {
+            val moving = phase != 0 || bounceOffset != 0f
+            if (phase != 0) {
+                phase = 0
+                Choreographer.getInstance().removeFrameCallback(frameCb)
+            }
+            val o = bounceOffset
+            dragOver = if (o != 0f) (if (o > 0f) -1f else 1f) * rubberInverse(abs(o)) else 0f
+            return moving
+        }
+
+        // The finger lifted (or the touch was cancelled): if the content is stretched, spring back
+        private fun releaseBounce() {
+            grabbed = false
+            if (dragOver != 0f) {
+                dragOver = 0f
+                if (bounceOffset != 0f) {
+                    springVel = 0f
+                    phase = 2
+                    schedule()
+                }
+            }
+        }
+
+        // Dragging: the part of the finger movement that is still inside the list scrolls it as usual,
+        // the part beyond an end stretches the rubber band.
+        override fun overScrollBy(
+            deltaX: Int, deltaY: Int, scrollX: Int, scrollY: Int,
+            scrollRangeX: Int, scrollRangeY: Int, maxOverScrollX: Int, maxOverScrollY: Int,
+            isTouchEvent: Boolean
+        ): Boolean {
+            if (!BOUNCE_ENABLED || !isTouchEvent) {
+                return super.overScrollBy(
+                    deltaX, deltaY, scrollX, scrollY, scrollRangeX, scrollRangeY,
+                    maxOverScrollX, maxOverScrollY, isTouchEvent
+                )
+            }
+            var d = deltaY.toFloat()
+            var over = dragOver
+            if (over != 0f) {
+                val n = over + d
+                if (over * n <= 0f) { d = n; over = 0f } // the finger came back inside the list
+                else { over = n; d = 0f }
+            }
+            var clamped = over != 0f
+            if (d != 0f) {
+                val target = scrollY + d
+                val lim = target.coerceIn(0f, scrollRangeY.toFloat())
+                if (lim != scrollY.toFloat()) scrollTo(0, lim.roundToInt())
+                val extra = target - lim
+                if (extra != 0f) { over = extra; clamped = true }
+            }
+            dragOver = over
+            applyDrag()
+            return clamped
+        }
+
+        // Our own fling replaces the Android one, which stops dead at the end of the list
+        override fun fling(velocityY: Int) {
+            if (!BOUNCE_ENABLED) {
+                super.fling(velocityY)
+                return
+            }
+            if (dragOver != 0f) return // let go while stretched: the spring-back takes over
+            pos = scrollY.toFloat()
+            flingVel = velocityY.toFloat()
+            phase = 1
+            schedule()
+        }
+
+        // Touching a list that is still gliding stops it and must not tap whatever is under the finger
+        override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
+            if (grabbed && ev.actionMasked == MotionEvent.ACTION_DOWN) return true
+            return super.onInterceptTouchEvent(ev)
+        }
+
+        override fun onDetachedFromWindow() {
+            super.onDetachedFromWindow()
+            phase = 0
+            Choreographer.getInstance().removeFrameCallback(frameCb)
+        }
 
         override fun getTopFadingEdgeStrength(): Float = 0f
 
@@ -2881,6 +3079,7 @@ class OverlayService : Service() {
                     anchorY = -1f
                     closing = false
                     fired = false
+                    grabbed = haltBounce()
                     downX = e.rawX
                     downY = e.rawY
                     startedOnCard = isOverCard?.invoke(e.rawX, e.rawY) ?: false
@@ -2890,7 +3089,6 @@ class OverlayService : Service() {
                     if (!swiping && !blockGestures) {
                         val dx = e.rawX - downX
                         val dy = e.rawY - downY
-
                         if (!fired) {
                             if (dy > dp(60) && dy > abs(dx) * 1.5f && !canScrollVertically(-1)) {
                                 fired = true
@@ -2917,7 +3115,9 @@ class OverlayService : Service() {
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> onTouching?.invoke(false)
             }
-            return super.dispatchTouchEvent(e)
+            val handled = super.dispatchTouchEvent(e)
+            if (e.actionMasked == MotionEvent.ACTION_UP || e.actionMasked == MotionEvent.ACTION_CANCEL) releaseBounce()
+            return handled
         }
     }
 
